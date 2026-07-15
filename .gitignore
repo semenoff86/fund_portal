@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+.next/
+out/
+dist/
+*.tsbuildinfo
+
+# Secrets and local env (keep *.example)
+.env
+.env.*
+!.env.example
+!.env.*.example
+!.env.docker.example
+backend/.env
+frontend/.env.local
+
+# Uploads and caches
+uploads/
+backend/uploads/
+frontend/uploads/
+cache/
+backend/cache/
+*.log
+
+# Document templates: each deployer fills source files themselves
+templates/documents/source/**
+!templates/documents/source/.gitkeep
+templates/documents/generated/**
+!templates/documents/generated/.gitkeep
+templates/documents/metadata/*
+!templates/documents/metadata/_example.json
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Misc junk
+*.bak
+*.tmp
+*.zip
+*.7z

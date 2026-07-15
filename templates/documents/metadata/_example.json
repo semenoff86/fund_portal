@@ -1,0 +1,38 @@
+{
+  "slug": "my-template",
+  "title": "Название документа",
+  "description": "Краткое описание для карточки в Сервис-деске",
+  "category": "HR",
+  "source_file": "source/my-template.docx",
+  "fields": [
+    {
+      "key": "full_name",
+      "label": "ФИО",
+      "type": "text",
+      "source": "profile.full_name",
+      "readonly": true,
+      "required": true
+    },
+    {
+      "key": "department",
+      "label": "Отдел",
+      "type": "text",
+      "source": "profile.department",
+      "readonly": true
+    },
+    {
+      "key": "document_date",
+      "label": "Дата документа",
+      "type": "date",
+      "source": "auto.today",
+      "readonly": true
+    },
+    {
+      "key": "purpose",
+      "label": "Цель / обоснование",
+      "type": "textarea",
+      "required": true,
+      "placeholder": "Укажите цель обращения"
+    }
+  ]
+}

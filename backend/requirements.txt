@@ -1,0 +1,23 @@
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+sqlalchemy==2.0.36
+psycopg2-binary==2.9.10
+pgvector==0.3.6
+passlib[bcrypt]==1.7.4
+bcrypt==4.2.1
+python-jose[cryptography]==3.3.0
+python-multipart==0.0.20
+pydantic[email]==2.10.3
+pydantic-settings==2.6.1
+python-dotenv==1.0.1
+alembic==1.14.0
+python-docx==1.1.2
+docxtpl==0.19.0
+# RAG / AI
+langchain==0.3.14
+langchain-community==0.3.14
+langchain-text-splitters==0.3.4
+langchain-postgres==0.0.14
+fastembed==0.5.1
+pymupdf==1.25.1
+psycopg[binary]==3.2.3

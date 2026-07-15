@@ -1,0 +1,17 @@
+**/.venv
+**/venv
+**/__pycache__
+**/*.pyc
+**/node_modules
+**/.next
+**/out
+**/.git
+**/.env
+**/.env.local
+**/uploads/*
+!backend/uploads/avatars/.gitkeep
+templates/documents/generated/*.docx
+*.md
+!templates/documents/README.md
+.cursor
+terminals
