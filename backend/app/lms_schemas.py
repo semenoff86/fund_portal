@@ -135,6 +135,51 @@ class ExtendDeadlineRequest(BaseModel):
     new_deadline_date: datetime
 
 
+class ExtendAssignmentDeadlineRequest(BaseModel):
+    new_deadline_date: datetime
+
+
+class DeadlineExtensionLogResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    assignment_id: int
+    old_deadline: Optional[datetime] = None
+    new_deadline: datetime
+    changed_by_user_id: Optional[int] = None
+    changed_by_name: Optional[str] = None
+    changed_at: datetime
+
+
+class ScoreDistributionItem(BaseModel):
+    range: str
+    count: int
+
+
+class CompletionDynamicsItem(BaseModel):
+    date: str
+    count: int
+
+
+class DashboardAlertItem(BaseModel):
+    assignment_id: int
+    course_id: int
+    course_title: str
+    status: AssignmentStatus
+    deadline_date: Optional[datetime] = None
+    is_expired: bool
+
+
+class UnblockRequestResponse(BaseModel):
+    ok: bool
+    notified_count: int
+
+
+class ApproveUnblockResponse(BaseModel):
+    ok: bool
+    assignment: AssignmentResponse
+
+
 class LmsOverviewStats(BaseModel):
     total_courses: int
     active_courses: int

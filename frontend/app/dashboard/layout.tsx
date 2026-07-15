@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { AuthGuard } from "@/components/auth-guard";
+import { LmsAlertsBanner } from "@/components/lms/lms-alerts-banner";
 import { Sidebar } from "@/components/sidebar";
 import { Topbar } from "@/components/topbar";
 
@@ -17,6 +18,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         />
         <div className="flex flex-1 flex-col overflow-hidden">
           <Topbar />
+          <LmsAlertsBanner />
           <main className="flex-1 overflow-y-auto p-6">{children}</main>
         </div>
       </div>

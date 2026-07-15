@@ -44,6 +44,12 @@ export default function LmsAdminDashboard() {
               <Send className="mr-2 h-4 w-4" />
               Напоминания о дедлайнах
             </Button>
+            <Button variant="outline" asChild>
+              <Link href="/dashboard/lms-admin/assign-bulk">
+                <Users className="mr-2 h-4 w-4" />
+                Массовое назначение
+              </Link>
+            </Button>
             <Button asChild>
               <Link href="/dashboard/lms-admin/courses/create">
                 <Plus className="mr-2 h-4 w-4" />

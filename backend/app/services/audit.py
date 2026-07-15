@@ -31,6 +31,7 @@ AUDIT_ACTIONS = (
     "course.assign",
     "course.assign_bulk",
     "assignment.extend_deadline",
+    "assignment.approve_unblock",
     "notification.send_deadline_warnings",
 )
 

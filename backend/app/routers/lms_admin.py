@@ -17,32 +17,42 @@ from app.models import (
     AssignmentStatus,
     Course,
     CourseAssignment,
+    DeadlineExtensionLog,
     Quiz,
     QuizAttempt,
     User,
 )
 from app.services.audit import log_audit
 from app.lms_schemas import (
+    ApproveUnblockResponse,
     AssignCourseRequest,
     AssignmentResponse,
     BulkAssignRequest,
+    CompletionDynamicsItem,
     CourseAdminResponse,
     CourseCreate,
     CourseListItem,
     CourseResultRow,
     CourseUpdate,
+    DeadlineExtensionLogResponse,
+    ExtendAssignmentDeadlineRequest,
     ExtendDeadlineRequest,
     LmsOverviewStats,
     QuizAdminResponse,
     QuizCreate,
     QuizUpdate,
+    ScoreDistributionItem,
     UserProgressRow,
 )
 from app.services.lms import (
+    approve_assignment_unblock,
     assign_course_to_users,
+    completion_dynamics,
     expire_overdue_assignments,
+    extend_assignment_deadline,
     get_assignment_attempts_count,
     get_best_score,
+    score_distribution,
     send_deadline_warnings,
 )
 
@@ -548,6 +558,28 @@ def user_progress(
     return rows
 
 
+@router.get("/lms/analytics/score-distribution", response_model=list[ScoreDistributionItem])
+def analytics_score_distribution(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_lms_admin),
+):
+    return [
+        ScoreDistributionItem(range=label, count=count)
+        for label, count in score_distribution(db)
+    ]
+
+
+@router.get("/lms/analytics/completion-dynamics", response_model=list[CompletionDynamicsItem])
+def analytics_completion_dynamics(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_lms_admin),
+):
+    return [
+        CompletionDynamicsItem(date=day, count=count)
+        for day, count in completion_dynamics(db, days=30)
+    ]
+
+
 @router.get("/lms/reports/export")
 def export_report(
     course_id: int | None = None,
@@ -603,7 +635,7 @@ def export_report(
     )
 
 
-# ── Deadlines ─────────────────────────────────────────────────────────────────
+# ── Deadlines & unblock ───────────────────────────────────────────────────────
 
 
 @router.get("/lms/deadlines/overdue", response_model=list[AssignmentResponse])
@@ -628,12 +660,11 @@ def extend_deadline(
     db: Session = Depends(get_db),
     admin: User = Depends(require_lms_admin),
 ):
+    """Legacy body-based extend; also writes DeadlineExtensionLog."""
     assignment = db.query(CourseAssignment).filter(CourseAssignment.id == payload.assignment_id).first()
     if not assignment:
         raise HTTPException(status_code=404, detail="Назначение не найдено")
-    assignment.deadline_date = payload.new_deadline_date
-    if assignment.status == AssignmentStatus.EXPIRED:
-        assignment.status = AssignmentStatus.IN_PROGRESS
+    extend_assignment_deadline(db, assignment, payload.new_deadline_date, admin.id)
     db.commit()
     db.refresh(assignment)
     log_audit(
@@ -645,6 +676,96 @@ def extend_deadline(
         request=request,
     )
     return _assignment_response(db, assignment)
+
+
+@router.post(
+    "/lms/assignments/{assignment_id}/extend-deadline",
+    response_model=AssignmentResponse,
+)
+def extend_assignment_deadline_endpoint(
+    assignment_id: int,
+    payload: ExtendAssignmentDeadlineRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_lms_admin),
+):
+    assignment = db.query(CourseAssignment).filter(CourseAssignment.id == assignment_id).first()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Назначение не найдено")
+    extend_assignment_deadline(db, assignment, payload.new_deadline_date, admin.id)
+    db.commit()
+    db.refresh(assignment)
+    log_audit(
+        db,
+        action="assignment.extend_deadline",
+        user=admin,
+        object_type="assignment",
+        object_id=assignment.id,
+        request=request,
+    )
+    return _assignment_response(db, assignment)
+
+
+@router.get(
+    "/lms/assignments/{assignment_id}/deadline-logs",
+    response_model=list[DeadlineExtensionLogResponse],
+)
+def list_deadline_logs(
+    assignment_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_lms_admin),
+):
+    assignment = db.query(CourseAssignment).filter(CourseAssignment.id == assignment_id).first()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Назначение не найдено")
+    logs = (
+        db.query(DeadlineExtensionLog)
+        .filter(DeadlineExtensionLog.assignment_id == assignment_id)
+        .order_by(DeadlineExtensionLog.changed_at.desc())
+        .all()
+    )
+    result: list[DeadlineExtensionLogResponse] = []
+    for log in logs:
+        changer = db.query(User).filter(User.id == log.changed_by_user_id).first() if log.changed_by_user_id else None
+        result.append(
+            DeadlineExtensionLogResponse(
+                id=log.id,
+                assignment_id=log.assignment_id,
+                old_deadline=log.old_deadline,
+                new_deadline=log.new_deadline,
+                changed_by_user_id=log.changed_by_user_id,
+                changed_by_name=changer.full_name if changer else None,
+                changed_at=log.changed_at,
+            )
+        )
+    return result
+
+
+@router.post(
+    "/lms/assignments/{assignment_id}/approve-unblock",
+    response_model=ApproveUnblockResponse,
+)
+def approve_unblock(
+    assignment_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_lms_admin),
+):
+    assignment = db.query(CourseAssignment).filter(CourseAssignment.id == assignment_id).first()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Назначение не найдено")
+    approve_assignment_unblock(db, assignment)
+    db.commit()
+    db.refresh(assignment)
+    log_audit(
+        db,
+        action="assignment.approve_unblock",
+        user=admin,
+        object_type="assignment",
+        object_id=assignment.id,
+        request=request,
+    )
+    return ApproveUnblockResponse(ok=True, assignment=_assignment_response(db, assignment))
 
 
 @router.post("/lms/notifications/send-deadline-warnings")

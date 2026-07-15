@@ -9,11 +9,13 @@ from app.database import get_db
 from app.dependencies import get_current_user
 from app.models import AssignmentStatus, Course, CourseAssignment, NotificationType, Quiz, QuizAttempt, User
 from app.lms_schemas import (
+    DashboardAlertItem,
     QuizAnswerReview,
     QuizAttemptResponse,
     QuizPublicResponse,
     QuizSubmitLmsRequest,
     QuizSubmitLmsResponse,
+    UnblockRequestResponse,
     UserCourseDetail,
     UserCourseListItem,
     UserProgressStats,
@@ -25,7 +27,9 @@ from app.services.lms import (
     expire_overdue_assignments,
     get_assignment_attempts_count,
     get_best_score,
+    get_dashboard_alerts,
     mark_final_attempt,
+    request_test_unblock,
     utcnow,
 )
 
@@ -156,7 +160,13 @@ def get_quiz(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _get_user_assignment(db, current_user.id, course_id)
+    expire_overdue_assignments(db)
+    assignment = _get_user_assignment(db, current_user.id, course_id)
+    if assignment.status == AssignmentStatus.EXPIRED:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Тест заблокирован: срок прохождения курса истёк",
+        )
     quizzes = db.query(Quiz).filter(Quiz.course_id == course_id).order_by(Quiz.id).all()
     if not quizzes:
         raise HTTPException(status_code=404, detail="Тест для курса не настроен")
@@ -170,10 +180,16 @@ def submit_quiz(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    expire_overdue_assignments(db)
     course = db.query(Course).filter(Course.id == course_id).first()
     if not course:
         raise HTTPException(status_code=404, detail="Курс не найден")
     assignment = _get_user_assignment(db, current_user.id, course_id)
+    if assignment.status == AssignmentStatus.EXPIRED:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Тест заблокирован: срок прохождения курса истёк. Запросите разблокировку у HR.",
+        )
     quizzes = db.query(Quiz).filter(Quiz.course_id == course_id).all()
     if not quizzes:
         raise HTTPException(status_code=400, detail="Нет вопросов в тесте")
@@ -236,6 +252,24 @@ def submit_quiz(
         attempt_id=attempt.id,
         reviews=reviews,
     )
+
+
+@router.post("/courses/{course_id}/request-unblock", response_model=UnblockRequestResponse)
+def request_unblock(
+    course_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    expire_overdue_assignments(db)
+    assignment = _get_user_assignment(db, current_user.id, course_id)
+    if assignment.status != AssignmentStatus.EXPIRED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Разблокировка нужна только для просроченных назначений",
+        )
+    notified = request_test_unblock(db, assignment, current_user)
+    db.commit()
+    return UnblockRequestResponse(ok=True, notified_count=notified)
 
 
 @router.get("/courses/{course_id}/results", response_model=list[QuizAttemptResponse])
@@ -311,3 +345,26 @@ def my_overdue(
         if course:
             items.append(_course_list_item(db, course, assignment))
     return items
+
+
+@router.get("/dashboard-alerts", response_model=list[DashboardAlertItem])
+def dashboard_alerts(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    alerts: list[DashboardAlertItem] = []
+    for assignment in get_dashboard_alerts(db, current_user.id):
+        course = db.query(Course).filter(Course.id == assignment.course_id).first()
+        if not course:
+            continue
+        alerts.append(
+            DashboardAlertItem(
+                assignment_id=assignment.id,
+                course_id=course.id,
+                course_title=course.title,
+                status=assignment.status,
+                deadline_date=assignment.deadline_date,
+                is_expired=assignment.status == AssignmentStatus.EXPIRED,
+            )
+        )
+    return alerts

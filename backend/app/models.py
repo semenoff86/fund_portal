@@ -77,6 +77,7 @@ class NotificationType(str, enum.Enum):
     DEADLINE_EXCEEDED = "DEADLINE_EXCEEDED"
     COURSE_COMPLETED = "COURSE_COMPLETED"
     TEST_FAILED = "TEST_FAILED"
+    UNBLOCK_REQUEST = "UNBLOCK_REQUEST"
 
 
 class ChatMessageRole(str, enum.Enum):
@@ -248,6 +249,29 @@ class CourseAssignment(Base):
     assigner: Mapped["User | None"] = relationship(foreign_keys=[assigned_by])
     course: Mapped["Course"] = relationship(back_populates="assignments")
     quiz_attempts: Mapped[list["QuizAttempt"]] = relationship(back_populates="course_assignment")
+    deadline_extension_logs: Mapped[list["DeadlineExtensionLog"]] = relationship(
+        back_populates="assignment", cascade="all, delete-orphan"
+    )
+
+
+class DeadlineExtensionLog(Base):
+    __tablename__ = "deadline_extension_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    assignment_id: Mapped[int] = mapped_column(
+        ForeignKey("course_assignments.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    old_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    new_deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    changed_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    assignment: Mapped["CourseAssignment"] = relationship(back_populates="deadline_extension_logs")
+    changed_by: Mapped["User | None"] = relationship(foreign_keys=[changed_by_user_id])
 
 
 class QuizAttempt(Base):

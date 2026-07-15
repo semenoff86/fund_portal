@@ -686,12 +686,61 @@ export async function assignLmsCourse(courseId: number, userIds: number[]) {
   });
 }
 
+export async function bulkAssignLmsCourses(courseIds: number[], userIds: number[]) {
+  return request<{ assigned_count: number }>("/api/admin/courses/assign/bulk", {
+    method: "POST",
+    body: JSON.stringify({ course_ids: courseIds, user_ids: userIds }),
+  });
+}
+
 export async function getLmsCourseAssignments(courseId: number) {
   return request<LmsAssignment[]>(`/api/admin/courses/${courseId}/assignments`);
 }
 
+export async function extendLmsAssignmentDeadline(assignmentId: number, newDeadlineDate: string) {
+  return request<LmsAssignment>(`/api/admin/lms/assignments/${assignmentId}/extend-deadline`, {
+    method: "POST",
+    body: JSON.stringify({ new_deadline_date: newDeadlineDate }),
+  });
+}
+
+export interface DeadlineExtensionLog {
+  id: number;
+  assignment_id: number;
+  old_deadline: string | null;
+  new_deadline: string;
+  changed_by_user_id: number | null;
+  changed_by_name: string | null;
+  changed_at: string;
+}
+
+export async function getLmsDeadlineLogs(assignmentId: number) {
+  return request<DeadlineExtensionLog[]>(
+    `/api/admin/lms/assignments/${assignmentId}/deadline-logs`,
+  );
+}
+
+export async function approveLmsUnblock(assignmentId: number) {
+  return request<{ ok: boolean; assignment: LmsAssignment }>(
+    `/api/admin/lms/assignments/${assignmentId}/approve-unblock`,
+    { method: "POST" },
+  );
+}
+
 export async function getLmsOverview() {
   return request<LmsOverview>("/api/admin/lms/analytics/overview");
+}
+
+export async function getLmsScoreDistribution() {
+  return request<{ range: string; count: number }[]>(
+    "/api/admin/lms/analytics/score-distribution",
+  );
+}
+
+export async function getLmsCompletionDynamics() {
+  return request<{ date: string; count: number }[]>(
+    "/api/admin/lms/analytics/completion-dynamics",
+  );
 }
 
 export async function getLmsCourseResults(courseId: number, status?: string) {
@@ -756,6 +805,26 @@ export async function submitLmsQuiz(courseId: number, answers: Record<number, nu
     method: "POST",
     body: JSON.stringify({ answers }),
   });
+}
+
+export async function requestLmsUnblock(courseId: number) {
+  return request<{ ok: boolean; notified_count: number }>(
+    `/api/lms/courses/${courseId}/request-unblock`,
+    { method: "POST" },
+  );
+}
+
+export interface LmsDashboardAlert {
+  assignment_id: number;
+  course_id: number;
+  course_title: string;
+  status: AssignmentStatus;
+  deadline_date: string | null;
+  is_expired: boolean;
+}
+
+export async function getLmsDashboardAlerts() {
+  return request<LmsDashboardAlert[]>("/api/lms/dashboard-alerts");
 }
 
 export async function getLmsCourseAttempts(courseId: number) {
