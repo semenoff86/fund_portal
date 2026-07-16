@@ -1,19 +1,25 @@
 """Audit logging helpers: write events and purge by retention policy."""
 
 from datetime import datetime, timedelta, timezone
+from typing import Callable
 
-from fastapi import Request
+from fastapi import Depends, Request
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.database import get_db
 from app.models import AuditLog, User
-
 
 # Canonical action codes (also used for UI filters)
 AUDIT_ACTIONS = (
     "auth.login",
     "auth.login_failed",
     "auth.logout",
+    "LOGIN_SUCCESS",
+    "LOGIN_FAILED",
+    "FILE_UPLOADED",
+    "DEADLINE_EXTENDED",
+    "AI_CHAT_QUERY",
     "user.create",
     "user.toggle_active",
     "user.delete",
@@ -34,6 +40,17 @@ AUDIT_ACTIONS = (
     "assignment.approve_unblock",
     "notification.send_deadline_warnings",
 )
+
+# Map uppercase / alternate names → canonical storage codes (keep admin UI filters working)
+_ACTION_ALIASES: dict[str, str] = {
+    "LOGIN_SUCCESS": "auth.login",
+    "LOGIN_FAILED": "auth.login_failed",
+}
+
+
+def normalize_action(action: str) -> str:
+    """Normalize alternate action names to canonical codes for storage/filters."""
+    return _ACTION_ALIASES.get(action, action)
 
 
 def get_client_ip(request: Request | None) -> str | None:
@@ -57,6 +74,8 @@ def log_audit(
     username: str | None = None,
     object_type: str | None = None,
     object_id: int | str | None = None,
+    resource_type: str | None = None,
+    resource_id: int | str | None = None,
     ip_address: str | None = None,
     request: Request | None = None,
     commit: bool = True,
@@ -67,12 +86,15 @@ def log_audit(
     if resolved_username is None and user is not None:
         resolved_username = user.username
 
+    resolved_type = object_type if object_type is not None else resource_type
+    resolved_id = object_id if object_id is not None else resource_id
+
     entry = AuditLog(
         user_id=resolved_user_id,
         username=resolved_username,
-        action=action,
-        object_type=object_type,
-        object_id=str(object_id) if object_id is not None else None,
+        action=normalize_action(action),
+        object_type=resolved_type,
+        object_id=str(resolved_id) if resolved_id is not None else None,
         success=success,
         ip_address=ip_address if ip_address is not None else get_client_ip(request),
     )
@@ -83,6 +105,22 @@ def log_audit(
     else:
         db.flush()
     return entry
+
+
+def get_audit_logger(db: Session = Depends(get_db)) -> Callable[..., AuditLog]:
+    """
+    FastAPI dependency that returns a bound ``log_audit`` callable for the request DB session.
+
+    Usage::
+
+        def login(..., audit=Depends(get_audit_logger)):
+            audit(action="LOGIN_FAILED", success=False, username=..., request=request)
+    """
+
+    def _logger(**kwargs) -> AuditLog:
+        return log_audit(db, **kwargs)
+
+    return _logger
 
 
 def purge_expired_audit_logs(db: Session) -> int:

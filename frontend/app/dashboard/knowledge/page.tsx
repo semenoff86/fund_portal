@@ -24,12 +24,6 @@ const CATEGORIES = [
   { value: "SAFETY", label: "Безопасность" },
 ];
 
-const STATUSES = [
-  { value: "all", label: "Все статусы" },
-  { value: "ACTIVE", label: "Активные" },
-  { value: "ARCHIVED", label: "Архив" },
-];
-
 const CATEGORY_LABELS: Record<string, string> = {
   HR: "HR",
   CREDIT: "Кредитование",
@@ -45,7 +39,7 @@ export default function KnowledgePage() {
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [category, setCategory] = useState("all");
-  const [status, setStatus] = useState("all");
+  const [showArchived, setShowArchived] = useState(false);
 
   const pageSize = 10;
   const totalPages = Math.ceil(total / pageSize);
@@ -56,9 +50,11 @@ export default function KnowledgePage() {
       const data = await getOrders({
         search: search || undefined,
         category: category !== "all" ? category : undefined,
-        status: status !== "all" ? status : undefined,
         page,
         page_size: pageSize,
+        ...(showArchived
+          ? { include_inactive: true }
+          : { is_active: true }),
       });
       setItems(data.items);
       setTotal(data.total);
@@ -68,7 +64,7 @@ export default function KnowledgePage() {
     } finally {
       setLoading(false);
     }
-  }, [search, category, status, page]);
+  }, [search, category, showArchived, page]);
 
   useEffect(() => {
     fetchOrders();
@@ -85,7 +81,7 @@ export default function KnowledgePage() {
       <div>
         <h2 className="text-2xl font-semibold text-slate-900">База знаний</h2>
         <p className="mt-1 text-sm text-slate-500">
-          Приказы, регламенты и внутренние документы МКК
+          Приказы, регламенты и внутренние документы МКК · гибридный поиск (семантика + pg_trgm)
         </p>
       </div>
 
@@ -120,16 +116,18 @@ export default function KnowledgePage() {
               </SelectContent>
             </Select>
 
-            <Select value={status} onValueChange={(v) => { setStatus(v); setPage(1); }}>
-              <SelectTrigger className="w-full sm:w-40" aria-label="Статус">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {STATUSES.map((s) => (
-                  <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-600 sm:pb-2">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                checked={showArchived}
+                onChange={(e) => {
+                  setShowArchived(e.target.checked);
+                  setPage(1);
+                }}
+              />
+              Показывать архивные версии
+            </label>
           </div>
         </CardContent>
       </Card>
@@ -142,6 +140,7 @@ export default function KnowledgePage() {
                 <tr>
                   <th className="px-6 py-3 text-left font-medium text-slate-600">Название</th>
                   <th className="px-6 py-3 text-left font-medium text-slate-600">Категория</th>
+                  <th className="px-6 py-3 text-left font-medium text-slate-600">Версия</th>
                   <th className="px-6 py-3 text-left font-medium text-slate-600">Статус</th>
                   <th className="px-6 py-3 text-left font-medium text-slate-600">Дата</th>
                 </tr>
@@ -150,7 +149,7 @@ export default function KnowledgePage() {
                 {loading
                   ? Array.from({ length: 5 }).map((_, i) => (
                       <tr key={i} className="border-b border-slate-100">
-                        <td className="px-6 py-4" colSpan={4}>
+                        <td className="px-6 py-4" colSpan={5}>
                           <Skeleton className="h-4 w-full" />
                         </td>
                       </tr>
@@ -158,7 +157,7 @@ export default function KnowledgePage() {
                   : items.length === 0
                     ? (
                         <tr>
-                          <td colSpan={4} className="px-6 py-12 text-center text-slate-500">
+                          <td colSpan={5} className="px-6 py-12 text-center text-slate-500">
                             Документы не найдены
                           </td>
                         </tr>
@@ -166,10 +165,14 @@ export default function KnowledgePage() {
                     : items.map((doc) => (
                         <tr
                           key={doc.id}
-                          className="border-b border-slate-100 transition-colors hover:bg-slate-50"
+                          className={`border-b border-slate-100 transition-colors hover:bg-slate-50 ${
+                            !doc.is_active ? "bg-slate-50/80" : ""
+                          }`}
                         >
                           <td className="px-6 py-4">
-                            <p className="font-medium text-slate-900">{doc.title}</p>
+                            <p className={`font-medium ${doc.is_active ? "text-slate-900" : "text-slate-500"}`}>
+                              {doc.title}
+                            </p>
                             {doc.content_text && (
                               <p className="mt-0.5 line-clamp-1 text-xs text-slate-500">
                                 {doc.content_text}
@@ -179,8 +182,18 @@ export default function KnowledgePage() {
                           <td className="px-6 py-4 text-slate-600">
                             {CATEGORY_LABELS[doc.category] || doc.category}
                           </td>
+                          <td className="px-6 py-4 tabular-nums text-slate-700">
+                            v{doc.version ?? 1}
+                          </td>
                           <td className="px-6 py-4">
-                            <StatusBadge status={doc.status} />
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <StatusBadge status={doc.status} />
+                              {!doc.is_active && (
+                                <span className="inline-flex items-center rounded-md bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-600">
+                                  Архив
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="px-6 py-4 text-slate-600">
                             {doc.issue_date

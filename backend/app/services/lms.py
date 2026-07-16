@@ -214,7 +214,8 @@ def extend_assignment_deadline(
     )
     db.add(log)
     assignment.deadline_date = new_deadline
-    if assignment.status == AssignmentStatus.EXPIRED:
+    # Extending always unblocks the learner (unless already completed)
+    if assignment.status != AssignmentStatus.COMPLETED:
         assignment.status = AssignmentStatus.IN_PROGRESS
     db.flush()
     return log

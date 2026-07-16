@@ -55,13 +55,14 @@ from app.services.lms import (
     score_distribution,
     send_deadline_warnings,
 )
+from app.utils.file_validator import validate_upload
 
 router = APIRouter(prefix="/api/admin", tags=["lms-admin"])
 
 UPLOADS_ROOT = Path("uploads")
 COURSES_DIR = UPLOADS_ROOT / "courses"
-ALLOWED_COURSE_EXTENSIONS = {".pdf", ".pptx", ".ppt"}
-MAX_FILE_SIZE = 50 * 1024 * 1024
+ALLOWED_COURSE_EXTENSIONS = [".pdf", ".pptx", ".ppt"]
+MAX_FILE_SIZE_MB = 50
 
 
 def _ensure_courses_dir() -> None:
@@ -69,17 +70,14 @@ def _ensure_courses_dir() -> None:
 
 
 async def _save_course_file(file: UploadFile) -> str:
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="Файл не выбран")
-    ext = Path(file.filename).suffix.lower()
-    if ext not in ALLOWED_COURSE_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="Разрешены только .pdf, .pptx, .ppt")
-    content = await file.read()
-    if len(content) > MAX_FILE_SIZE:
-        raise HTTPException(status_code=400, detail="Максимальный размер файла — 50 МБ")
+    contents, ext = await validate_upload(
+        file,
+        allowed_extensions=ALLOWED_COURSE_EXTENSIONS,
+        max_size_mb=MAX_FILE_SIZE_MB,
+    )
     _ensure_courses_dir()
     dest = COURSES_DIR / f"{uuid.uuid4().hex}{ext}"
-    dest.write_bytes(content)
+    dest.write_bytes(contents)
     return f"/uploads/courses/{dest.name}"
 
 

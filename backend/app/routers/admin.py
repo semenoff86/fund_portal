@@ -21,14 +21,16 @@ from app.schemas import (
     TemplateResponse,
 )
 from app.services.audit import AUDIT_ACTIONS, log_audit, purge_expired_audit_logs
+from app.utils.file_validator import validate_upload
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 UPLOADS_ROOT = Path("uploads")
 TEMPLATES_DIR = UPLOADS_ROOT / "templates"
 KNOWLEDGE_DIR = UPLOADS_ROOT / "knowledge"
-ALLOWED_TEMPLATE_EXTENSIONS = {".docx", ".pdf"}
-ALLOWED_KNOWLEDGE_EXTENSIONS = {".docx", ".pdf"}
+ALLOWED_TEMPLATE_EXTENSIONS = [".docx", ".pdf"]
+ALLOWED_KNOWLEDGE_EXTENSIONS = [".docx", ".pdf"]
+MAX_UPLOAD_SIZE_MB = 25
 
 
 def _ensure_dirs() -> None:
@@ -36,24 +38,15 @@ def _ensure_dirs() -> None:
     KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _validate_extension(filename: str, allowed: set[str]) -> str:
-    ext = Path(filename).suffix.lower()
-    if ext not in allowed:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Недопустимый формат файла. Разрешены: {', '.join(sorted(allowed))}",
-        )
-    return ext
-
-
-async def _save_upload(file: UploadFile, directory: Path, allowed: set[str]) -> str:
-    if not file.filename:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Файл не выбран")
-    ext = _validate_extension(file.filename, allowed)
+async def _save_upload(file: UploadFile, directory: Path, allowed: list[str]) -> str:
+    contents, ext = await validate_upload(
+        file,
+        allowed_extensions=allowed,
+        max_size_mb=MAX_UPLOAD_SIZE_MB,
+    )
     safe_name = f"{uuid.uuid4().hex}{ext}"
     dest = directory / safe_name
-    content = await file.read()
-    dest.write_bytes(content)
+    dest.write_bytes(contents)
     return f"/uploads/{directory.name}/{safe_name}"
 
 
@@ -245,9 +238,16 @@ async def create_knowledge(
     admin: User = Depends(require_admin),
 ):
     from app.models import DocumentCategory, DocumentStatus
+    from app.services.rag_ingestion import (
+        extract_text_from_file,
+        handle_document_versioning,
+        ingest_document,
+    )
 
     _ensure_dirs()
+    original_name = file.filename or "document"
     file_path = await _save_upload(file, KNOWLEDGE_DIR, ALLOWED_KNOWLEDGE_EXTENSIONS)
+    disk_path = UPLOADS_ROOT / file_path.removeprefix("/uploads/")
 
     parsed_date: date | None = None
     if issue_date:
@@ -262,16 +262,49 @@ async def create_knowledge(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректная категория или статус") from exc
 
+    next_version = handle_document_versioning(
+        db,
+        filename=original_name,
+        category=category,
+        title=title.strip(),
+    )
+    if next_version > 1:
+        doc_status = DocumentStatus.ACTIVE
+
+    content_text: str | None = None
+    try:
+        content_text = extract_text_from_file(disk_path) or None
+    except Exception:
+        content_text = None
+
     doc = OrderDocument(
         title=title.strip(),
         category=doc_category,
         status=doc_status,
         issue_date=parsed_date,
         file_path=file_path,
+        content_text=content_text,
+        version=next_version,
+        is_active=True,
     )
     db.add(doc)
     db.commit()
     db.refresh(doc)
+
+    try:
+        ingest_document(
+            str(disk_path),
+            category=category,
+            uploaded_by=admin.id,
+            version=next_version,
+            source_file=original_name,
+            document_id=doc.id,
+        )
+    except Exception as exc:
+        import logging
+
+        logging.getLogger(__name__).warning("RAG ingest failed for %s: %s", original_name, exc)
+
     log_audit(
         db,
         action="knowledge.create",
@@ -323,12 +356,37 @@ async def update_knowledge(
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Некорректная дата") from exc
 
     if file and file.filename:
+        from app.services.rag_ingestion import extract_text_from_file, ingest_document
+
         _ensure_dirs()
+        original_name = file.filename
         if doc.file_path:
             old_path = UPLOADS_ROOT / doc.file_path.removeprefix("/uploads/")
             if old_path.exists():
                 old_path.unlink()
         doc.file_path = await _save_upload(file, KNOWLEDGE_DIR, ALLOWED_KNOWLEDGE_EXTENSIONS)
+        disk_path = UPLOADS_ROOT / doc.file_path.removeprefix("/uploads/")
+        try:
+            doc.content_text = extract_text_from_file(disk_path) or None
+        except Exception:
+            pass
+        try:
+            ingest_document(
+                str(disk_path),
+                category=doc.category.value,
+                uploaded_by=admin.id,
+                version=doc.version,
+                source_file=original_name,
+                document_id=doc.id,
+            )
+        except Exception as exc:
+            import logging
+
+            logging.getLogger(__name__).warning("RAG re-ingest failed: %s", exc)
+
+    # Keep status / is_active in sync when admin toggles ARCHIVED
+    if status_value is not None:
+        doc.is_active = doc.status == DocumentStatus.ACTIVE
 
     db.commit()
     db.refresh(doc)

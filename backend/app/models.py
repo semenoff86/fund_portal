@@ -114,10 +114,19 @@ class User(Base):
     notifications: Mapped[list["Notification"]] = relationship(back_populates="user")
     chat_sessions: Mapped[list["ChatSession"]] = relationship(back_populates="user")
     audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="user")
+    refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class AuditLog(Base):
-    """Immutable trail of authenticated mutating operations and auth events."""
+    """Immutable trail of authenticated mutating operations and auth events.
+
+    Field aliases (for API / docs compatibility):
+      resource_type ↔ object_type, resource_id ↔ object_id, timestamp ↔ created_at
+    Canonical action codes use dotted form (e.g. ``auth.login``); uppercase
+    aliases like ``LOGIN_SUCCESS`` are accepted by the audit helper.
+    """
 
     __tablename__ = "audit_logs"
     __table_args__ = (
@@ -141,6 +150,52 @@ class AuditLog(Base):
     )
 
     user: Mapped["User | None"] = relationship(back_populates="audit_logs")
+
+    # ── Aliases matching production naming conventions ─────────────────────────
+    @property
+    def resource_type(self) -> str | None:
+        return self.object_type
+
+    @resource_type.setter
+    def resource_type(self, value: str | None) -> None:
+        self.object_type = value
+
+    @property
+    def resource_id(self) -> str | None:
+        return self.object_id
+
+    @resource_id.setter
+    def resource_id(self, value: str | int | None) -> None:
+        self.object_id = str(value) if value is not None else None
+
+    @property
+    def timestamp(self) -> datetime:
+        return self.created_at
+
+
+class RefreshToken(Base):
+    """Hashed refresh tokens for session revocation and rotation."""
+
+    __tablename__ = "refresh_tokens"
+    __table_args__ = (
+        Index("ix_refresh_tokens_user_id", "user_id"),
+        Index("ix_refresh_tokens_expires_at", "expires_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    user: Mapped["User"] = relationship(back_populates="refresh_tokens")
 
 
 class Template(Base):
@@ -167,7 +222,13 @@ class OrderDocument(Base):
     issue_date: Mapped[date | None] = mapped_column(Date)
     file_path: Mapped[str | None] = mapped_column(String(512))
     content_text: Mapped[str | None] = mapped_column(Text)
+    # Document-level vector (optional); primary RAG store is LangChain PGVector collection.
+    # Dimension kept at 1536 for backward compatibility with existing DBs.
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1536))
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true", index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

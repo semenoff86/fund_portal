@@ -25,13 +25,20 @@ dist/
 backend/.env
 frontend/.env.local
 
-# Uploads and caches
-uploads/
-backend/uploads/
-frontend/uploads/
+# Uploads and caches (keep directory structure via .gitkeep)
+uploads/**
+!uploads/**/
+!uploads/**/.gitkeep
+backend/uploads/**
+!backend/uploads/**/
+!backend/uploads/**/.gitkeep
+frontend/uploads/**
 cache/
 backend/cache/
 *.log
+logs/**
+!logs/
+!logs/.gitkeep
 
 # Document templates: each deployer fills source files themselves
 templates/documents/source/**

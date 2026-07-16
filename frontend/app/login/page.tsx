@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { login, ApiError } from "@/lib/api";
-import { setToken } from "@/lib/auth";
+import { setRefreshToken, setToken } from "@/lib/auth";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -24,8 +24,9 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const { access_token } = await login(username, password);
+      const { access_token, refresh_token } = await login(username, password);
       setToken(access_token);
+      setRefreshToken(refresh_token);
       toast.success("Вход выполнен успешно");
       router.push("/dashboard/knowledge");
     } catch (err) {

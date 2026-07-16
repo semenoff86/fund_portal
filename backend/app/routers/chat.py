@@ -1,8 +1,8 @@
-"""RAG-based AI chat with session history."""
+"""RAG-based AI chat with session history and citation sources."""
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.chat_schemas import (
@@ -10,12 +10,15 @@ from app.chat_schemas import (
     ChatSessionCreate,
     ChatSessionDetailResponse,
     ChatSessionResponse,
+    FlatChatMessageRequest,
+    FlatChatMessageResponse,
     SendMessageRequest,
     SendMessageResponse,
 )
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models import ChatMessage, ChatMessageRole, ChatSession, User
+from app.services.audit import log_audit
 from app.services.rag_chain import auto_session_title, run_rag_query
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -30,6 +33,89 @@ def _get_session_or_404(db: Session, session_id: int, user_id: int) -> ChatSessi
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сессия не найдена")
     return session
+
+
+AI_CHAT_SETUP_MESSAGE = (
+    "AI-ассистент находится в режиме настройки. "
+    "Функционал будет доступен после подключения локальной модели."
+)
+
+
+def _run_and_persist(
+    *,
+    db: Session,
+    session: ChatSession,
+    content: str,
+    current_user: User,
+    request: Request | None = None,
+) -> SendMessageResponse:
+    from app.config import get_settings
+
+    settings = get_settings()
+    is_first_message = (
+        db.query(ChatMessage).filter(ChatMessage.session_id == session.id).count() == 0
+    )
+
+    user_msg = ChatMessage(
+        session_id=session.id,
+        role=ChatMessageRole.USER,
+        content=content.strip(),
+    )
+    db.add(user_msg)
+    db.flush()
+
+    if session.title == "Новый чат" and is_first_message:
+        session.title = auto_session_title(content)
+
+    history = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.session_id == session.id, ChatMessage.id != user_msg.id)
+        .order_by(ChatMessage.created_at.desc())
+        .limit(settings.chat_history_limit)
+        .all()
+    )
+    history.reverse()
+
+    try:
+        answer, sources = run_rag_query(content, history)
+        rag_ok = True
+    except Exception as exc:
+        # Graceful fallback when Ollama / embeddings are unavailable — never crash the UI
+        import logging
+
+        logging.getLogger(__name__).warning("RAG unavailable, returning setup mock: %s", exc)
+        answer = AI_CHAT_SETUP_MESSAGE
+        sources = []
+        rag_ok = False
+
+    assistant_msg = ChatMessage(
+        session_id=session.id,
+        role=ChatMessageRole.ASSISTANT,
+        content=answer,
+        sources=sources,
+    )
+    db.add(assistant_msg)
+    session.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(user_msg)
+    db.refresh(assistant_msg)
+
+    log_audit(
+        db,
+        action="AI_CHAT_QUERY",
+        success=rag_ok,
+        user=current_user,
+        object_type="chat_session",
+        object_id=session.id,
+        request=request,
+    )
+
+    return SendMessageResponse(
+        answer=answer,
+        sources=sources,
+        user_message=ChatMessageResponse.model_validate(user_msg),
+        assistant_message=ChatMessageResponse.model_validate(assistant_msg),
+    )
 
 
 @router.post("/sessions", response_model=ChatSessionResponse, status_code=status.HTTP_201_CREATED)
@@ -81,61 +167,49 @@ def get_session(
 def send_message(
     session_id: int,
     payload: SendMessageRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from app.config import get_settings
-
-    settings = get_settings()
     session = _get_session_or_404(db, session_id, current_user.id)
-
-    is_first_message = (
-        db.query(ChatMessage).filter(ChatMessage.session_id == session.id).count() == 0
+    return _run_and_persist(
+        db=db,
+        session=session,
+        content=payload.content,
+        current_user=current_user,
+        request=request,
     )
 
-    user_msg = ChatMessage(
+
+@router.post("/message", response_model=FlatChatMessageResponse)
+def send_flat_message(
+    payload: FlatChatMessageRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Convenience endpoint: ``{ session_id, message }`` → ``{ answer, sources }``.
+
+    Creates a session automatically when ``session_id`` is omitted.
+    """
+    if payload.session_id is not None:
+        session = _get_session_or_404(db, payload.session_id, current_user.id)
+    else:
+        session = ChatSession(user_id=current_user.id, title="Новый чат")
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+
+    result = _run_and_persist(
+        db=db,
+        session=session,
+        content=payload.message,
+        current_user=current_user,
+        request=request,
+    )
+    return FlatChatMessageResponse(
+        answer=result.answer,
+        sources=result.sources,
         session_id=session.id,
-        role=ChatMessageRole.USER,
-        content=payload.content.strip(),
-    )
-    db.add(user_msg)
-    db.flush()
-
-    if session.title == "Новый чат" and is_first_message:
-        session.title = auto_session_title(payload.content)
-
-    history = (
-        db.query(ChatMessage)
-        .filter(ChatMessage.session_id == session.id, ChatMessage.id != user_msg.id)
-        .order_by(ChatMessage.created_at.desc())
-        .limit(settings.chat_history_limit)
-        .all()
-    )
-    history.reverse()
-
-    try:
-        answer, sources = run_rag_query(payload.content, history)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"AI-сервис недоступен. Убедитесь, что Ollama запущена: {exc}",
-        ) from exc
-
-    assistant_msg = ChatMessage(
-        session_id=session.id,
-        role=ChatMessageRole.ASSISTANT,
-        content=answer,
-        sources=sources,
-    )
-    db.add(assistant_msg)
-    session.updated_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(user_msg)
-    db.refresh(assistant_msg)
-
-    return SendMessageResponse(
-        answer=answer,
-        sources=sources,
-        user_message=ChatMessageResponse.model_validate(user_msg),
-        assistant_message=ChatMessageResponse.model_validate(assistant_msg),
     )

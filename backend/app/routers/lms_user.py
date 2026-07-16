@@ -165,7 +165,7 @@ def get_quiz(
     if assignment.status == AssignmentStatus.EXPIRED:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Тест заблокирован: срок прохождения курса истёк",
+            detail="Срок прохождения истек",
         )
     quizzes = db.query(Quiz).filter(Quiz.course_id == course_id).order_by(Quiz.id).all()
     if not quizzes:
@@ -188,7 +188,7 @@ def submit_quiz(
     if assignment.status == AssignmentStatus.EXPIRED:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Тест заблокирован: срок прохождения курса истёк. Запросите разблокировку у HR.",
+            detail="Срок прохождения истек",
         )
     quizzes = db.query(Quiz).filter(Quiz.course_id == course_id).all()
     if not quizzes:

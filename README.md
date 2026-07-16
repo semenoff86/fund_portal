@@ -16,14 +16,18 @@
 ```
 fund_portal/
 ├── backend/              # FastAPI API
+│   ├── alembic/          # Alembic migrations
 │   ├── app/
 │   │   ├── models.py
 │   │   ├── routers/      # admin, lms_admin, lms_user, notifications, …
-│   │   └── services/
+│   │   ├── services/
+│   │   └── utils/        # file_validator (magic bytes)
+│   ├── scripts/migrate.sh
 │   └── seed.py
 ├── frontend/             # Next.js
 ├── templates/documents/  # Docx-шаблоны сервис-деска
 ├── scripts/              # docker-up.ps1, start-backend.ps1, start-frontend.ps1
+├── Makefile              # make migrate
 ├── docker-compose.yml
 └── LMS_README.md         # Подробно про LMS
 ```
@@ -35,6 +39,85 @@ fund_portal/
 **[DEPLOY_WINDOWS_SERVER.md](DEPLOY_WINDOWS_SERVER.md)**
 
 Кратко: PostgreSQL + pgvector → llama.cpp (Qwen 7B) → backend (Python) → frontend (Node 18). Docker на Win2012 не рекомендуется.
+
+---
+
+## Развёртывание на Ubuntu (production)
+
+Целевая среда: **Ubuntu 22.04 / 24.04** + Docker Compose.
+
+### 1. Установить Docker
+
+```bash
+sudo apt update
+sudo apt install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+  https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+sudo usermod -aG docker $USER
+# перелогиньтесь в SSH, чтобы группа docker применилась
+```
+
+### 2. Клонировать репозиторий
+
+```bash
+git clone <URL-репозитория> fund_portal
+cd fund_portal
+```
+
+### 3. Настроить окружение
+
+```bash
+cp .env.docker.example .env
+# или: cp backend/.env.example backend/.env
+nano .env
+```
+
+Обязательно задайте:
+
+- `SECRET_KEY` — длинная случайная строка
+- пароль PostgreSQL / `DATABASE_URL` (если меняете дефолт `postgres/postgres`)
+
+### 4. Собрать и запустить
+
+```bash
+docker compose up -d --build
+docker compose ps
+```
+
+### 5. Миграции и seed
+
+Entrypoint backend обычно применяет миграции сам. При необходимости вручную:
+
+```bash
+docker compose exec backend alembic upgrade head
+docker compose exec backend python seed.py
+```
+
+### 6. Проверка
+
+| Сервис | URL |
+|--------|-----|
+| Портал | `http://<IP-сервера>:3000` |
+| API / Swagger | `http://<IP-сервера>:8000/docs` |
+
+Демо: `admin` / `admin`
+
+Firewall:
+
+```bash
+sudo ufw allow 22/tcp
+sudo ufw allow 3000/tcp
+sudo ufw allow 8000/tcp
+sudo ufw enable
+```
+
+AI-чат без Ollama отвечает mock-сообщением о настройке и **не роняет** API.  
+Подключение LLM: [RAG_SETUP.md](RAG_SETUP.md).
 
 ---
 
@@ -107,10 +190,11 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 ### Frontend
 
-```powershell
+```bash
 cd frontend
 npm install
-copy .env.local.example .env.local
+# recharts уже в package.json; при необходимости: npm install recharts
+cp .env.local.example .env.local
 npm run dev
 ```
 
@@ -124,6 +208,52 @@ psql fund_portal -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
 
 Для локального backend нужен доступ к PostgreSQL (например, `docker compose up -d db`).
+
+### Миграции БД (Alembic)
+
+Схема управляется через Alembic (каталог `backend/alembic/`).
+
+**Windows (PowerShell):**
+
+```powershell
+# PostgreSQL должен быть запущен (например: docker compose up -d db)
+.\scripts\migrate.ps1
+
+# Или напрямую:
+cd backend
+.\.venv\Scripts\python.exe -m alembic upgrade head
+```
+
+**Linux / macOS / Git Bash:**
+
+```bash
+make migrate
+# или
+./scripts/migrate.sh
+# или
+cd backend && alembic upgrade head
+```
+
+Новая ревизия после изменения моделей:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m alembic revision --autogenerate -m "describe_change"
+```
+
+**Существующая БД** (созданная через `create_all` / `seed.py` без Alembic):
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m alembic stamp head
+```
+
+В Docker entrypoint миграции применяются автоматически при старте `backend`.
+
+> PostgreSQL extensions: `vector` (pgvector) и `pg_trgm` (fuzzy search).  
+> Вручную: `CREATE EXTENSION IF NOT EXISTS pg_trgm;`
+
+AI / RAG: см. [RAG_SETUP.md](RAG_SETUP.md).
 
 ---
 
@@ -197,7 +327,7 @@ psql fund_portal -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
 | Группа | Примеры |
 |--------|---------|
-| Auth | `POST /api/auth/login`, `POST /api/auth/logout` |
+| Auth | `POST /api/auth/login`, `POST /api/auth/refresh`, `POST /api/auth/logout` |
 | Profile | `GET/PUT /api/profile/me`, `POST /api/profile/avatar` |
 | База знаний | `GET /api/orders` |
 | Сервис-деск | `POST/GET /api/requests`, `GET /api/document-templates` |
@@ -215,14 +345,33 @@ psql fund_portal -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ## Безопасность
 
 - Пароли: bcrypt
-- JWT для API
+- JWT access-токен (по умолчанию **15 минут**) + opaque **refresh-токен** (по умолчанию **7 дней**, хеш в таблице `refresh_tokens`)
+- Rate limit на логин: **5 запросов / минуту** (SlowAPI)
+- Журнал действий (`audit_logs`) для входа/выхода и мутаций
+- Строгая проверка загрузок: размер, расширение и magic bytes (PDF / DOCX / JPG / PNG / …)
 - `AuthGuard` на фронтенде
 - CORS: localhost (3000–3001) и частные IP в LAN
 
+### Refresh Token flow
+
+1. `POST /api/auth/login` → `{ access_token, refresh_token, expires_in, token_type }`
+2. Клиент хранит оба токена (frontend: `localStorage`)
+3. API-запросы идут с `Authorization: Bearer <access_token>`
+4. При `401` клиент вызывает `POST /api/auth/refresh` с `{ "refresh_token": "..." }` и получает новый `access_token`
+5. `POST /api/auth/logout` отзывает все refresh-токены пользователя (сессия больше не продлевается)
+
+Конфиг (`.env`):
+
+```
+ACCESS_TOKEN_EXPIRE_MINUTES=15
+REFRESH_TOKEN_EXPIRE_DAYS=7
+```
+
 ## Следующие этапы
 
-- [ ] Семантический поиск через pgvector embeddings
-- [x] Интеграция LLM для AI-ассистента (RAG) — см. [AI_SETUP.md](AI_SETUP.md)
-- [ ] Alembic-миграции для production
-- [ ] Refresh-токены и ротация сессий
+- [x] Семантический поиск через pgvector embeddings (hybrid: PGVector + pg_trgm)
+- [x] Интеграция LLM для AI-ассистента (RAG) — см. [AI_SETUP.md](AI_SETUP.md) и [RAG_SETUP.md](RAG_SETUP.md)
+- [x] Alembic-миграции для production
+- [x] Refresh-токены и ротация сессий
+- [x] Версионирование документов БЗ + hybrid search (`pg_trgm` + PGVector)
 - [ ] LMS Phase 3: графики, cron для дедлайнов (см. LMS_README.md)

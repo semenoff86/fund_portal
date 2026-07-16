@@ -86,9 +86,9 @@ export default function LmsQuizPage() {
               <Lock className="h-6 w-6 text-red-600" />
             </div>
             <div>
-              <h2 className="text-xl font-semibold text-slate-900">Тест заблокирован</h2>
+              <h2 className="text-xl font-semibold text-slate-900">Тест заблокирован, срок истек</h2>
               <p className="mt-2 text-sm text-slate-500">
-                Срок прохождения курса истёк. Запросите разблокировку у HR или администратора.
+                Срок прохождения истек. Запросите разблокировку у HR или администратора.
               </p>
             </div>
             <Button onClick={handleRequestUnblock} disabled={requesting || requested}>
@@ -96,7 +96,7 @@ export default function LmsQuizPage() {
                 ? "Запрос отправлен"
                 : requesting
                   ? "Отправка…"
-                  : "Запросить разблокировку у HR/Администратора"}
+                  : "Запросить разблокировку у HR"}
             </Button>
             <Button variant="outline" asChild>
               <a href={`/dashboard/lms/courses/${id}`}>Вернуться к курсу</a>

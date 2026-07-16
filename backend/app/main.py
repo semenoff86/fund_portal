@@ -3,13 +3,18 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from app.auth import router as auth_router
 from app.config import get_settings
 from app.database import init_db
+from app.rate_limit import limiter
 from app.routers import (
     admin,
     chat,
@@ -30,6 +35,7 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 (UPLOADS_DIR / "templates").mkdir(parents=True, exist_ok=True)
 (UPLOADS_DIR / "knowledge").mkdir(parents=True, exist_ok=True)
 (UPLOADS_DIR / "courses").mkdir(parents=True, exist_ok=True)
+(UPLOADS_DIR / "avatars").mkdir(parents=True, exist_ok=True)
 
 
 @asynccontextmanager
@@ -53,6 +59,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 # Разрешаем localhost и частные IP (доступ из локальной сети)
 CORS_ORIGIN_REGEX = (
@@ -91,3 +100,11 @@ app.include_router(notifications.router)
 @app.get("/api/health")
 def health_check():
     return {"status": "ok"}
+
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Слишком много попыток входа. Повторите через минуту."},
+    )

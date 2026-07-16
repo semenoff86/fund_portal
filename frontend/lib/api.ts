@@ -1,4 +1,4 @@
-import { getToken, removeToken } from "./auth";
+import { getRefreshToken, getToken, removeToken, setToken } from "./auth";
 
 const API_PORT = process.env.NEXT_PUBLIC_API_PORT || "8000";
 
@@ -21,9 +21,32 @@ export class ApiError extends Error {
   }
 }
 
+let refreshInFlight: Promise<boolean> | null = null;
+
+/** Exchange refresh_token for a new access_token. Returns true on success. */
+async function tryRefreshAccessToken(): Promise<boolean> {
+  const refreshToken = getRefreshToken();
+  if (!refreshToken) return false;
+
+  try {
+    const response = await fetch(`${getApiUrl()}/api/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+    if (!response.ok) return false;
+    const data = (await response.json()) as { access_token: string };
+    setToken(data.access_token);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function request<T>(
   path: string,
   options: RequestInit = {},
+  allowRetry = true,
 ): Promise<T> {
   const token = getToken();
   const headers: HeadersInit = {
@@ -60,6 +83,23 @@ async function request<T>(
     clearTimeout(timeoutId);
   }
 
+  if (response.status === 401 && allowRetry && !path.startsWith("/api/auth/")) {
+    if (!refreshInFlight) {
+      refreshInFlight = tryRefreshAccessToken().finally(() => {
+        refreshInFlight = null;
+      });
+    }
+    const refreshed = await refreshInFlight;
+    if (refreshed) {
+      return request<T>(path, options, false);
+    }
+    removeToken();
+    if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
+      window.location.href = "/login";
+    }
+    throw new ApiError(401, "Не авторизован");
+  }
+
   if (response.status === 401) {
     removeToken();
     if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
@@ -86,11 +126,32 @@ async function request<T>(
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 export async function login(username: string, password: string) {
-  return request<{ access_token: string; token_type: string }>("/api/auth/login", {
+  return request<{
+    access_token: string;
+    refresh_token: string;
+    token_type: string;
+    expires_in: number;
+  }>("/api/auth/login", {
     method: "POST",
     body: JSON.stringify({ username, password }),
   });
 }
+
+export async function refreshSession() {
+  const refreshToken = getRefreshToken();
+  if (!refreshToken) {
+    throw new ApiError(401, "Нет refresh-токена");
+  }
+  return request<{ access_token: string; token_type: string; expires_in: number }>(
+    "/api/auth/refresh",
+    {
+      method: "POST",
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    },
+    false,
+  );
+}
+
 
 // ── Profile ───────────────────────────────────────────────────────────────────
 
@@ -144,6 +205,8 @@ export interface OrderDocument {
   issue_date: string | null;
   file_path: string | null;
   content_text: string | null;
+  version: number;
+  is_active: boolean;
 }
 
 export interface OrderListResponse {
@@ -159,6 +222,8 @@ export async function getOrders(params: {
   search?: string;
   page?: number;
   page_size?: number;
+  is_active?: boolean;
+  include_inactive?: boolean;
 }) {
   const searchParams = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {

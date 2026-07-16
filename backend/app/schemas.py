@@ -23,7 +23,25 @@ class LoginRequest(BaseModel):
 
 class TokenResponse(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
+    expires_in: int = Field(
+        ...,
+        description="Access token lifetime in seconds",
+    )
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str = Field(..., min_length=1)
+
+
+class RefreshResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int = Field(
+        ...,
+        description="Access token lifetime in seconds",
+    )
 
 
 # ── User / Profile ────────────────────────────────────────────────────────────
@@ -90,6 +108,8 @@ class OrderDocumentResponse(BaseModel):
     issue_date: Optional[date] = None
     file_path: Optional[str] = None
     content_text: Optional[str] = None
+    version: int = 1
+    is_active: bool = True
 
 
 class OrderListResponse(BaseModel):
@@ -148,6 +168,10 @@ class ServiceRequestResponse(BaseModel):
     status: RequestStatus
     description: Optional[str] = None
     created_at: datetime
+
+
+class ServiceRequestStatusUpdate(BaseModel):
+    status: RequestStatus
 
 
 # ── Chat ──────────────────────────────────────────────────────────────────────

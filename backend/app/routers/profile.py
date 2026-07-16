@@ -3,21 +3,22 @@
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, UploadFile
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_current_user
 from app.models import User
 from app.schemas import AvatarUploadResponse, ProfileUpdateRequest, UserResponse
+from app.utils.file_validator import validate_upload
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 
 UPLOAD_DIR = Path("uploads/avatars")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
-MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
+ALLOWED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp", ".gif"]
+MAX_FILE_SIZE_MB = 5
 
 
 @router.get("/me", response_model=UserResponse)
@@ -45,19 +46,11 @@ async def upload_avatar(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if not file.filename:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Файл не выбран")
-
-    ext = Path(file.filename).suffix.lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Допустимые форматы: JPG, PNG, WEBP, GIF",
-        )
-
-    contents = await file.read()
-    if len(contents) > MAX_FILE_SIZE:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Максимальный размер файла — 5 МБ")
+    contents, ext = await validate_upload(
+        file,
+        allowed_extensions=ALLOWED_EXTENSIONS,
+        max_size_mb=MAX_FILE_SIZE_MB,
+    )
 
     filename = f"{current_user.id}_{uuid.uuid4().hex}{ext}"
     filepath = UPLOAD_DIR / filename

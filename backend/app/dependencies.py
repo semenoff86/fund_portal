@@ -7,8 +7,16 @@ from sqlalchemy.orm import Session
 from app.auth import decode_access_token
 from app.database import get_db
 from app.models import User, UserRole
+from app.services.audit import get_audit_logger  # noqa: F401 — re-export for Depends()
 
 security = HTTPBearer()
+
+__all__ = [
+    "get_current_user",
+    "require_admin",
+    "require_lms_admin",
+    "get_audit_logger",
+]
 
 
 def get_current_user(

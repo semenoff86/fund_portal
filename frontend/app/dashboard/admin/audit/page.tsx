@@ -27,6 +27,8 @@ import {
 const ACTION_LABELS: Record<string, string> = {
   "auth.login": "Вход",
   "auth.login_failed": "Неудачный вход",
+  LOGIN_SUCCESS: "Вход",
+  LOGIN_FAILED: "Неудачный вход",
   "auth.logout": "Выход",
   "user.create": "Создание пользователя",
   "user.toggle_active": "Блокировка/разблокировка",

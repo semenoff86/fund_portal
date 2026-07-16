@@ -123,8 +123,8 @@ export default function LmsAnalyticsPage() {
                         type="monotone"
                         dataKey="count"
                         name="Завершения"
-                        stroke="#2563eb"
-                        fill="#93c5fd"
+                        stroke="#0d9488"
+                        fill="#5eead4"
                         fillOpacity={0.45}
                       />
                     </AreaChart>

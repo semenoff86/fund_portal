@@ -50,3 +50,16 @@ class SendMessageResponse(BaseModel):
     sources: List[ChatSource] = []
     user_message: ChatMessageResponse
     assistant_message: ChatMessageResponse
+
+
+class FlatChatMessageRequest(BaseModel):
+    """POST /api/chat/message payload."""
+
+    message: str = Field(..., min_length=1, max_length=4000)
+    session_id: Optional[int] = None
+
+
+class FlatChatMessageResponse(BaseModel):
+    answer: str
+    sources: List[ChatSource] = []
+    session_id: int
