@@ -34,11 +34,14 @@ fund_portal/
 
 ## Развёртывание на сервере (Windows Server 2012)
 
-Для production на **Windows Server 2012** (CPU, без Docker) — пошаговая инструкция:
+Два рабочих варианта:
 
-**[DEPLOY_WINDOWS_SERVER.md](DEPLOY_WINDOWS_SERVER.md)**
+| Сценарий | Документ |
+|----------|----------|
+| **ВМ Ubuntu в Hyper-V** + Docker Compose (рекомендуется для портала) | **[DEPLOY_UBUNTU_HYPERV.md](DEPLOY_UBUNTU_HYPERV.md)** |
+| Нативная установка на Win2012 без Docker | [DEPLOY_WINDOWS_SERVER.md](DEPLOY_WINDOWS_SERVER.md) |
 
-Кратко: PostgreSQL + pgvector → llama.cpp (Qwen 7B) → backend (Python) → frontend (Node 18). Docker на Win2012 не рекомендуется.
+Кратко про нативный путь: PostgreSQL + pgvector → llama.cpp (Qwen 7B) → backend (Python) → frontend (Node 18). Docker напрямую на Win2012 не рекомендуется.
 
 ---
 
