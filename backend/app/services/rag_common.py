@@ -24,7 +24,16 @@ def _pg_connection_string() -> str:
 @lru_cache
 def get_embeddings() -> FastEmbedEmbeddings:
     cache_dir = settings.fastembed_cache_dir
-    os.makedirs(cache_dir, exist_ok=True)
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        probe = os.path.join(cache_dir, ".write_test")
+        with open(probe, "w", encoding="utf-8") as fh:
+            fh.write("ok")
+        os.remove(probe)
+    except OSError:
+        # Named volume may be root-owned; fall back to a writable temp dir.
+        cache_dir = "/tmp/fastembed"
+        os.makedirs(cache_dir, exist_ok=True)
     return FastEmbedEmbeddings(
         model_name=settings.embedding_model,
         cache_dir=cache_dir,

@@ -43,13 +43,15 @@ COPY backend/alembic ./alembic
 COPY templates/documents /templates/documents
 
 RUN mkdir -p uploads/avatars uploads/templates uploads/knowledge uploads/courses \
+        /app/cache/fastembed \
         /templates/documents/generated \
     && chown -R appuser:appuser /app /templates
 
 COPY backend/docker-entrypoint.sh /docker-entrypoint.sh
 RUN sed -i 's/\r$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh
 
-USER appuser
+# Entrypoint starts as root to fix volume ownership, then drops to appuser.
+USER root
 
 EXPOSE 8000
 

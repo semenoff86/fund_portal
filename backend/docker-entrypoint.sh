@@ -1,8 +1,12 @@
 #!/bin/sh
 set -e
 
+# Named volumes are often root-owned on first create — fix before dropping privileges.
+mkdir -p /app/cache/fastembed /app/uploads
+chown -R appuser:appuser /app/cache /app/uploads 2>/dev/null || true
+
 echo "Waiting for PostgreSQL..."
-python - <<'PY'
+runuser -u appuser -- python - <<'PY'
 import os
 import sys
 import time
@@ -26,13 +30,13 @@ else:
 PY
 
 echo "Applying Alembic migrations..."
-python - <<'PY'
+runuser -u appuser -- python - <<'PY'
 """Upgrade schema; stamp existing create_all databases so Alembic can take over."""
 import os
 import subprocess
 import sys
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, inspect
 
 url = os.environ["DATABASE_URL"]
 engine = create_engine(url)
@@ -44,13 +48,10 @@ has_app = "users" in tables
 
 if has_app and not has_alembic:
     print("Existing schema detected without alembic_version — stamping head, then upgrading.")
-    # Stamp baseline so the full initial migration is not re-applied on populated DBs.
-    # Then upgrade picks up any newer revisions (e.g. refresh_tokens via create_all fallback).
     subprocess.check_call([sys.executable, "-m", "alembic", "stamp", "head"], cwd="/app")
 else:
     subprocess.check_call([sys.executable, "-m", "alembic", "upgrade", "head"], cwd="/app")
 
-# Ensure refresh_tokens exists even on stamped legacy DBs (create_all is idempotent).
 from app.database import init_db
 
 init_db()
@@ -58,7 +59,7 @@ print("Schema ready.")
 PY
 
 echo "Initializing seed data..."
-python seed.py
+runuser -u appuser -- python seed.py
 
 echo "Starting API server..."
-exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+exec runuser -u appuser -- uvicorn app.main:app --host 0.0.0.0 --port 8000
