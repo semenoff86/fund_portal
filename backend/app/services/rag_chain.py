@@ -1,4 +1,4 @@
-"""RAG query pipeline: retrieve → LLM → citations."""
+"""RAG query pipeline: retrieve → LLM → citations (with CPU/AVX fallback)."""
 
 import logging
 import re
@@ -21,6 +21,24 @@ SYSTEM_PROMPT = (
 )
 
 CITATION_PATTERN = re.compile(r"\[(\d+)\]")
+GREETING_RE = re.compile(
+    r"^(привет|здравствуй|добрый\s+(день|вечер|утро)|hello|hi)\b|"
+    r"что\s+ты\s+(умеешь|можешь|делаешь)|кто\s+ты",
+    re.IGNORECASE,
+)
+
+FALLBACK_CAPABILITIES = (
+    "Здравствуйте! Я внутренний AI-ассистент Фонда МКК.\n\n"
+    "Я умею отвечать на вопросы по документам базы знаний "
+    "(уставы, приказы, регламенты) и показывать источники.\n\n"
+    "Задайте вопрос по загруженным документам — я подберу релевантные фрагменты.\n\n"
+    "⚠️ Генеративная модель (Ollama) на этой ВМ сейчас недоступна: "
+    "CPU гостя без инструкций AVX (Hyper-V). "
+    "Работает режим поиска по документам. "
+    "Чтобы включить полноценные ответы LLM, в настройках ВМ Hyper-V "
+    "отключите «Migrate to a physical computer with a different processor version» "
+    "/ режим совместимости процессора и перезапустите ВМ."
+)
 
 
 class OllamaUnavailableError(RuntimeError):
@@ -39,15 +57,26 @@ def _is_ollama_connection_error(exc: BaseException) -> bool:
         "nodename nor servname",
         "httpx.",
         "httpcore.",
-        "ollama",
-        "11434",
     )
     return any(n in text for n in needles)
 
 
+def _is_ollama_cpu_crash(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(
+        n in text
+        for n in (
+            "illegal instruction",
+            "llama-server process has terminated",
+            "signal: 4",
+            "sigill",
+            "core dumped",
+        )
+    )
+
+
 def ensure_ollama_reachable() -> None:
-    """Lightweight preflight against Ollama /api/tags."""
-    import urllib.error
+    """Lightweight preflight against Ollama /api/tags (API up ≠ inference works)."""
     import urllib.request
 
     base = settings.ollama_base_url.rstrip("/")
@@ -123,36 +152,72 @@ def extract_cited_sources(answer: str, source_map: dict[int, dict[str, Any]]) ->
     return sources
 
 
+def _fallback_from_retrieval(
+    question: str,
+    docs: list,
+    source_map: dict[int, dict[str, Any]],
+) -> tuple[str, list[dict[str, Any]]]:
+    """Answer without LLM when Ollama crashes (e.g. no AVX on Hyper-V guest)."""
+    if GREETING_RE.search(question.strip()) and not docs:
+        return FALLBACK_CAPABILITIES, []
+
+    if not docs:
+        answer = (
+            "В документах Фонда нет информации по этому вопросу.\n\n"
+            "⚠️ Полноценная генерация ответа недоступна: Ollama не запускается на CPU "
+            "без AVX. Загрузите документы в базу знаний или включите AVX в Hyper-V."
+        )
+        return answer, []
+
+    lines = [
+        "Найдены фрагменты из базы знаний (режим поиска без LLM — Ollama на этой ВМ "
+        "падает из‑за отсутствия AVX):\n"
+    ]
+    for i, doc in enumerate(docs, start=1):
+        snippet = doc.page_content[:500].replace("\n", " ").strip()
+        fname = (doc.metadata or {}).get("source_file", "document")
+        lines.append(f"[{i}] {fname}: {snippet}")
+    lines.append(
+        "\nЧтобы получить связный ответ модели, отключите режим совместимости "
+        "процессора Hyper-V (нужны флаги AVX) и перезапустите ВМ."
+    )
+    answer = "\n\n".join(lines)
+    sources = extract_cited_sources(answer, source_map)
+    return answer, sources
+
+
 def run_rag_query(question: str, history: list[ChatMessage]) -> tuple[str, list[dict[str, Any]]]:
     """Execute RAG: similarity retrieve (k=4) → ChatOllama → parse citations."""
-    ensure_ollama_reachable()
-
     retriever = get_retriever()
     docs = retriever.invoke(question)
     source_map = _build_source_map(docs)
     context = _build_context(docs)
 
-    messages: list = [
-        SystemMessage(content=f"{SYSTEM_PROMPT}\n\nКонтекст из документов:\n{context}"),
-    ]
-    for msg in history:
-        if msg.role == ChatMessageRole.USER:
-            messages.append(HumanMessage(content=msg.content))
-        else:
-            messages.append(AIMessage(content=msg.content))
-    messages.append(HumanMessage(content=question))
-
-    llm = _get_llm()
+    # Try generative LLM; /api/tags can be OK while llama-server SIGILL on no-AVX CPUs.
     try:
-        response = llm.invoke(messages)
-    except Exception as exc:
-        if _is_ollama_connection_error(exc):
-            raise OllamaUnavailableError(str(exc)) from exc
-        raise
+        ensure_ollama_reachable()
+        messages: list = [
+            SystemMessage(content=f"{SYSTEM_PROMPT}\n\nКонтекст из документов:\n{context}"),
+        ]
+        for msg in history:
+            if msg.role == ChatMessageRole.USER:
+                messages.append(HumanMessage(content=msg.content))
+            else:
+                messages.append(AIMessage(content=msg.content))
+        messages.append(HumanMessage(content=question))
 
-    answer = response.content if hasattr(response, "content") else str(response)
-    sources = extract_cited_sources(answer, source_map)
-    return answer, sources
+        llm = _get_llm()
+        response = llm.invoke(messages)
+        answer = response.content if hasattr(response, "content") else str(response)
+        sources = extract_cited_sources(answer, source_map)
+        return answer, sources
+    except Exception as exc:
+        if _is_ollama_cpu_crash(exc) or _is_ollama_connection_error(exc) or isinstance(
+            exc, OllamaUnavailableError
+        ):
+            logger.warning("Ollama inference unavailable, retrieval fallback: %s", exc)
+            return _fallback_from_retrieval(question, docs, source_map)
+        raise
 
 
 def auto_session_title(first_message: str, max_len: int = 50) -> str:
