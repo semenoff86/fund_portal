@@ -176,7 +176,7 @@ def ingest_document(
     Steps:
       1. Extract text (PyMuPDF / python-docx)
       2. Split with RecursiveCharacterTextSplitter (chunk_size=800, overlap=100)
-      3. Embed via FastEmbed (BAAI/bge-m3)
+      3. Embed via FastEmbed (multilingual MiniLM by default)
       4. Upsert chunks with metadata: source_file, category, version, chunk_index, uploaded_by
     """
     path = Path(file_path)

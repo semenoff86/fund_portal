@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     # RAG / AI
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "qwen2.5:7b-instruct-q4_K_M"
-    embedding_model: str = "BAAI/bge-m3"
+    embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     rag_documents_dir: str = "uploads/knowledge"
     fastembed_cache_dir: str = "cache/fastembed"
     pgvector_collection: str = "mkk_documents"

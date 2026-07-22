@@ -29,6 +29,17 @@ OLLAMA_UNAVAILABLE_PAYLOAD = {
 }
 
 
+def _service_unavailable(detail_answer: str | None = None) -> HTTPException:
+    payload = {
+        "answer": detail_answer or OLLAMA_UNAVAILABLE_PAYLOAD["answer"],
+        "sources": [],
+    }
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=payload,
+    )
+
+
 def _get_session_or_404(db: Session, session_id: int, user_id: int) -> ChatSession:
     session = (
         db.query(ChatSession)
@@ -91,10 +102,7 @@ def _run_and_persist(
             object_id=session.id,
             request=request,
         )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=OLLAMA_UNAVAILABLE_PAYLOAD,
-        ) from exc
+        raise _service_unavailable() from exc
     except Exception as exc:
         import logging
 
@@ -109,10 +117,12 @@ def _run_and_persist(
             object_id=session.id,
             request=request,
         )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=OLLAMA_UNAVAILABLE_PAYLOAD,
-        ) from exc
+        msg = str(exc)
+        if "FastEmbed" in msg or "embedding" in msg.lower() or "supported models" in msg.lower():
+            raise _service_unavailable(
+                "Сервис эмбеддингов недоступен. Обратитесь к администратору."
+            ) from exc
+        raise _service_unavailable() from exc
 
     assistant_msg = ChatMessage(
         session_id=session.id,
