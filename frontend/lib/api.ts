@@ -162,6 +162,7 @@ export interface UserProfile {
   full_name: string;
   role: string;
   department: string | null;
+  position: string | null;
   avatar_url: string | null;
   bio: string | null;
   phone: string | null;
@@ -347,7 +348,7 @@ export interface ChatMessageItem {
   created_at: string;
 }
 
-async function requestLong<T>(path: string, options: RequestInit = {}, timeoutMs = 90000): Promise<T> {
+async function requestLong<T>(path: string, options: RequestInit = {}, timeoutMs = 180000): Promise<T> {
   const token = getToken();
   const headers: HeadersInit = { ...(options.headers || {}) };
   if (!(options.body instanceof FormData)) {
@@ -382,7 +383,13 @@ async function requestLong<T>(path: string, options: RequestInit = {}, timeoutMs
   }
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: "Ошибка сервера" }));
-    const message = typeof error.detail === "string" ? error.detail : "Ошибка сервера";
+    const detail = error.detail;
+    let message = "Ошибка сервера";
+    if (typeof detail === "string") {
+      message = detail;
+    } else if (detail && typeof detail === "object" && typeof detail.answer === "string") {
+      message = detail.answer;
+    }
     throw new ApiError(response.status, message);
   }
   return response.json();
@@ -432,8 +439,31 @@ export interface AdminTemplate {
   id: number;
   name: string;
   category: string;
+  filename?: string | null;
   file_path: string;
+  is_active: boolean;
   created_at: string;
+}
+
+export interface ActiveDocTemplate {
+  id: number;
+  name: string;
+  category: string;
+  filename?: string | null;
+}
+
+export async function getActiveServiceDeskTemplates() {
+  return request<ActiveDocTemplate[]>("/api/service-desk/templates/active");
+}
+
+export async function generateServiceDeskDocument(
+  templateId: number,
+  customFields: Record<string, string>,
+) {
+  return request<{ download_url: string; filename: string }>("/api/service-desk/generate", {
+    method: "POST",
+    body: JSON.stringify({ template_id: templateId, custom_fields: customFields }),
+  });
 }
 
 export interface AdminKnowledgeDoc extends OrderDocument {
@@ -474,7 +504,7 @@ export async function uploadAdminTemplate(data: { name: string; category: string
   formData.append("name", data.name);
   formData.append("category", data.category);
   formData.append("file", data.file);
-  return request<AdminTemplate>("/api/admin/templates/upload", {
+  return request<AdminTemplate>("/api/admin/templates", {
     method: "POST",
     body: formData,
   });

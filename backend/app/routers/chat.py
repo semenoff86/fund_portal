@@ -19,9 +19,14 @@ from app.database import get_db
 from app.dependencies import get_current_user
 from app.models import ChatMessage, ChatMessageRole, ChatSession, User
 from app.services.audit import log_audit
-from app.services.rag_chain import auto_session_title, run_rag_query
+from app.services.rag_chain import OllamaUnavailableError, auto_session_title, run_rag_query
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+
+OLLAMA_UNAVAILABLE_PAYLOAD = {
+    "answer": "AI-сервис временно недоступен.",
+    "sources": [],
+}
 
 
 def _get_session_or_404(db: Session, session_id: int, user_id: int) -> ChatSession:
@@ -33,12 +38,6 @@ def _get_session_or_404(db: Session, session_id: int, user_id: int) -> ChatSessi
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Сессия не найдена")
     return session
-
-
-AI_CHAT_SETUP_MESSAGE = (
-    "AI-ассистент находится в режиме настройки. "
-    "Функционал будет доступен после подключения локальной модели."
-)
 
 
 def _run_and_persist(
@@ -78,15 +77,42 @@ def _run_and_persist(
 
     try:
         answer, sources = run_rag_query(content, history)
-        rag_ok = True
-    except Exception as exc:
-        # Graceful fallback when Ollama / embeddings are unavailable — never crash the UI
+    except OllamaUnavailableError as exc:
         import logging
 
-        logging.getLogger(__name__).warning("RAG unavailable, returning setup mock: %s", exc)
-        answer = AI_CHAT_SETUP_MESSAGE
-        sources = []
-        rag_ok = False
+        logging.getLogger(__name__).warning("Ollama unavailable: %s", exc)
+        db.rollback()
+        log_audit(
+            db,
+            action="AI_CHAT_QUERY",
+            success=False,
+            user=current_user,
+            object_type="chat_session",
+            object_id=session.id,
+            request=request,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=OLLAMA_UNAVAILABLE_PAYLOAD,
+        ) from exc
+    except Exception as exc:
+        import logging
+
+        logging.getLogger(__name__).exception("RAG pipeline failed: %s", exc)
+        db.rollback()
+        log_audit(
+            db,
+            action="AI_CHAT_QUERY",
+            success=False,
+            user=current_user,
+            object_type="chat_session",
+            object_id=session.id,
+            request=request,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=OLLAMA_UNAVAILABLE_PAYLOAD,
+        ) from exc
 
     assistant_msg = ChatMessage(
         session_id=session.id,
@@ -103,7 +129,7 @@ def _run_and_persist(
     log_audit(
         db,
         action="AI_CHAT_QUERY",
-        success=rag_ok,
+        success=True,
         user=current_user,
         object_type="chat_session",
         object_id=session.id,

@@ -1,5 +1,6 @@
 """RAG query pipeline: retrieve → LLM → citations."""
 
+import logging
 import re
 from typing import Any
 
@@ -9,23 +10,68 @@ from app.config import get_settings
 from app.models import ChatMessage, ChatMessageRole
 from app.services.rag_common import get_retriever
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
-SYSTEM_PROMPT = """Ты — внутренний AI-ассистент Фонда МКК. Отвечай СТРОГО на основе предоставленного контекста. Если ответа нет, скажи: «В документах Фонда нет информации по этому вопросу». В конце каждого утверждения из документа ставь маркер источника в формате [1], [2] и т.д. Не выдумывай факты. Отвечай на русском языке, кратко и по делу."""
+SYSTEM_PROMPT = (
+    "Ты — внутренний AI-ассистент Фонда МКК. Отвечай СТРОГО на основе "
+    "предоставленного контекста. Если ответа нет, скажи: "
+    "'В документах Фонда нет информации по этому вопросу'. "
+    "В конце каждого утверждения ставь маркер источника [1], [2] и т.д."
+)
 
 CITATION_PATTERN = re.compile(r"\[(\d+)\]")
 
 
+class OllamaUnavailableError(RuntimeError):
+    """Raised when the Ollama HTTP endpoint cannot be reached."""
+
+
+def _is_ollama_connection_error(exc: BaseException) -> bool:
+    text = f"{type(exc).__name__}: {exc}".lower()
+    needles = (
+        "connection refused",
+        "connect error",
+        "connecttimeout",
+        "timed out",
+        "name or service not known",
+        "failed to establish",
+        "nodename nor servname",
+        "httpx.",
+        "httpcore.",
+        "ollama",
+        "11434",
+    )
+    return any(n in text for n in needles)
+
+
+def ensure_ollama_reachable() -> None:
+    """Lightweight preflight against Ollama /api/tags."""
+    import urllib.error
+    import urllib.request
+
+    base = settings.ollama_base_url.rstrip("/")
+    url = f"{base}/api/tags"
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            if getattr(resp, "status", 200) >= 500:
+                raise OllamaUnavailableError(f"Ollama returned HTTP {resp.status}")
+    except OllamaUnavailableError:
+        raise
+    except Exception as exc:
+        raise OllamaUnavailableError(f"Ollama unreachable at {base}: {exc}") from exc
+
+
 def _get_llm():
-    """Prefer langchain-ollama; fall back to langchain_community ChatOllama."""
+    """ChatOllama with model/base_url from env (OLLAMA_MODEL / OLLAMA_BASE_URL)."""
     try:
         from langchain_ollama import ChatOllama  # type: ignore
     except ImportError:
         from langchain_community.chat_models import ChatOllama  # type: ignore
 
     return ChatOllama(
-        model=settings.ollama_model,
-        base_url=settings.ollama_base_url,
+        model=settings.ollama_model or "qwen2.5:7b-instruct-q4_K_M",
+        base_url=settings.ollama_base_url or "http://localhost:11434",
         temperature=0.1,
         num_ctx=4096,
     )
@@ -69,7 +115,6 @@ def extract_cited_sources(answer: str, source_map: dict[int, dict[str, Any]]) ->
                 "snippet": src["snippet"],
             }
         )
-    # If model forgot citations, still return retrieved docs as soft sources
     if not sources and source_map:
         sources = [
             {"id": v["id"], "file": v["file"], "snippet": v["snippet"]}
@@ -80,6 +125,8 @@ def extract_cited_sources(answer: str, source_map: dict[int, dict[str, Any]]) ->
 
 def run_rag_query(question: str, history: list[ChatMessage]) -> tuple[str, list[dict[str, Any]]]:
     """Execute RAG: similarity retrieve (k=4) → ChatOllama → parse citations."""
+    ensure_ollama_reachable()
+
     retriever = get_retriever()
     docs = retriever.invoke(question)
     source_map = _build_source_map(docs)
@@ -96,7 +143,13 @@ def run_rag_query(question: str, history: list[ChatMessage]) -> tuple[str, list[
     messages.append(HumanMessage(content=question))
 
     llm = _get_llm()
-    response = llm.invoke(messages)
+    try:
+        response = llm.invoke(messages)
+    except Exception as exc:
+        if _is_ollama_connection_error(exc):
+            raise OllamaUnavailableError(str(exc)) from exc
+        raise
+
     answer = response.content if hasattr(response, "content") else str(response)
     sources = extract_cited_sources(answer, source_map)
     return answer, sources

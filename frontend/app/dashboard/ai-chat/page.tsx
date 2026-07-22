@@ -52,23 +52,32 @@ function SourcesBlock({
 }) {
   if (!sources.length) return null;
   return (
-    <div className="mt-3 space-y-2 border-t border-slate-200 pt-3">
-      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Источники</p>
+    <div className="mt-3 space-y-2 rounded-lg border border-slate-200 bg-white/80 p-3 shadow-sm">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        Источники
+      </p>
       {sources.map((s) => (
         <div
           key={s.id}
           id={`chat-source-${s.id}`}
-          className={`rounded-md border p-2 text-xs transition-colors ${
+          className={`rounded-md border p-2.5 text-xs transition-colors ${
             highlightId === s.id
-              ? "border-blue-400 bg-blue-50"
-              : "border-slate-200 bg-white hover:border-blue-200"
+              ? "border-blue-400 bg-blue-50 ring-1 ring-blue-200"
+              : "border-slate-200 bg-slate-50 hover:border-blue-200"
           }`}
         >
           <div className="flex items-center gap-1.5 font-medium text-slate-800">
-            <FileText className="h-3.5 w-3.5 text-blue-600" />
-            <span>[{s.id}] {s.file}</span>
+            <FileText className="h-3.5 w-3.5 shrink-0 text-blue-600" />
+            <span className="truncate">
+              <span className="mr-1 rounded bg-blue-100 px-1 py-0.5 text-[10px] font-bold text-blue-700">
+                [{s.id}]
+              </span>
+              {s.file}
+            </span>
           </div>
-          <p className="mt-1 line-clamp-2 text-slate-500">{s.snippet}</p>
+          {s.snippet ? (
+            <p className="mt-1.5 line-clamp-3 leading-relaxed text-slate-500">{s.snippet}</p>
+          ) : null}
         </div>
       ))}
     </div>
@@ -292,7 +301,7 @@ export default function AiChatPage() {
               <div className="rounded-2xl bg-slate-100 px-4 py-3 text-sm text-slate-500">
                 <span className="inline-flex items-center gap-2">
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" />
-                  AI печатает… (инференс на CPU ~5–15 сек)
+                  AI печатает… (на 1 vCPU 7B может занять 30–120 сек)
                 </span>
               </div>
             </div>
