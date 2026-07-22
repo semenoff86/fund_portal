@@ -22,6 +22,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 
+def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
+    """Persist Enum.value (e.g. admin), not Enum.name (ADMIN)."""
+    return [member.value for member in enum_cls]
+
+
 class UserRole(str, enum.Enum):
     ADMIN = "admin"
     ANALYST = "analyst"
@@ -80,6 +85,14 @@ class NotificationType(str, enum.Enum):
     UNBLOCK_REQUEST = "UNBLOCK_REQUEST"
 
 
+class TemplateCategory(str, enum.Enum):
+    """Categories for DOCX templates used in Service Desk generation."""
+
+    HR = "HR"
+    FINANCE = "FINANCE"
+    GENERAL = "GENERAL"
+
+
 class ChatMessageRole(str, enum.Enum):
     USER = "user"
     ASSISTANT = "assistant"
@@ -93,8 +106,11 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    role: Mapped[UserRole] = mapped_column(Enum(UserRole, name="user_role"), nullable=False)
+    role: Mapped[UserRole] = mapped_column(
+        Enum(UserRole, name="user_role", values_callable=_enum_values), nullable=False
+    )
     department: Mapped[str | None] = mapped_column(String(128))
+    position: Mapped[str | None] = mapped_column(String(128))
     avatar_url: Mapped[str | None] = mapped_column(String(512))
     bio: Mapped[str | None] = mapped_column(Text)
     phone: Mapped[str | None] = mapped_column(String(32))
@@ -199,13 +215,26 @@ class RefreshToken(Base):
 
 
 class Template(Base):
+    """DOCX template for Service Desk dynamic generation (docxtpl / Jinja2).
+
+    Also referred to as DocumentTemplate in API docs.
+    """
+
     __tablename__ = "templates"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     category: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     file_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true", index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# Backwards-compatible alias for docs / imports
+DocumentTemplate = Template
 
 
 class OrderDocument(Base):
@@ -214,10 +243,15 @@ class OrderDocument(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     category: Mapped[DocumentCategory] = mapped_column(
-        Enum(DocumentCategory, name="document_category"), nullable=False, index=True
+        Enum(DocumentCategory, name="document_category", values_callable=_enum_values),
+        nullable=False,
+        index=True,
     )
     status: Mapped[DocumentStatus] = mapped_column(
-        Enum(DocumentStatus, name="document_status"), nullable=False, default=DocumentStatus.ACTIVE, index=True
+        Enum(DocumentStatus, name="document_status", values_callable=_enum_values),
+        nullable=False,
+        default=DocumentStatus.ACTIVE,
+        index=True,
     )
     issue_date: Mapped[date | None] = mapped_column(Date)
     file_path: Mapped[str | None] = mapped_column(String(512))
@@ -239,7 +273,12 @@ class Course(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     category: Mapped[CourseCategory | None] = mapped_column(
-        Enum(CourseCategory, name="course_category", native_enum=False),
+        Enum(
+            CourseCategory,
+            name="course_category",
+            native_enum=False,
+            values_callable=_enum_values,
+        ),
         nullable=True,
         index=True,
     )
@@ -300,7 +339,12 @@ class CourseAssignment(Base):
     assigned_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     deadline_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[AssignmentStatus] = mapped_column(
-        Enum(AssignmentStatus, name="assignment_status", native_enum=False),
+        Enum(
+            AssignmentStatus,
+            name="assignment_status",
+            native_enum=False,
+            values_callable=_enum_values,
+        ),
         default=AssignmentStatus.ASSIGNED,
         nullable=False,
     )
@@ -366,7 +410,13 @@ class Notification(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     type: Mapped[NotificationType] = mapped_column(
-        Enum(NotificationType, name="notification_type", native_enum=False), nullable=False
+        Enum(
+            NotificationType,
+            name="notification_type",
+            native_enum=False,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
@@ -404,7 +454,13 @@ class ChatMessage(Base):
         ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True
     )
     role: Mapped[ChatMessageRole] = mapped_column(
-        Enum(ChatMessageRole, name="chat_message_role", native_enum=False), nullable=False
+        Enum(
+            ChatMessageRole,
+            name="chat_message_role",
+            native_enum=False,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
     sources: Mapped[list | None] = mapped_column(JSONB, nullable=True)
@@ -418,9 +474,13 @@ class ServiceRequest(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    request_type: Mapped[RequestType] = mapped_column(Enum(RequestType, name="request_type"), nullable=False)
+    request_type: Mapped[RequestType] = mapped_column(
+        Enum(RequestType, name="request_type", values_callable=_enum_values), nullable=False
+    )
     status: Mapped[RequestStatus] = mapped_column(
-        Enum(RequestStatus, name="request_status"), nullable=False, default=RequestStatus.PENDING
+        Enum(RequestStatus, name="request_status", values_callable=_enum_values),
+        nullable=False,
+        default=RequestStatus.PENDING,
     )
     description: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
