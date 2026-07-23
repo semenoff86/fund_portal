@@ -1,0 +1,21 @@
+[Unit]
+Description=Ollama LLM Service (Fund Portal)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ollama
+Group=ollama
+ExecStart=/usr/local/bin/ollama serve
+Environment="OLLAMA_HOST=0.0.0.0:11434"
+Restart=always
+RestartSec=5
+TimeoutStartSec=120
+
+# Resource soft caps suitable for 16GB host with Docker stack
+# (Ollama model qwen2.5:7b-instruct-q4_K_M typically needs ~5–6GB)
+MemoryMax=8G
+
+[Install]
+WantedBy=multi-user.target
